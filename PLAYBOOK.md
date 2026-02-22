@@ -5,9 +5,9 @@ All apps follow the same pattern: **pnpm monorepo → GHCR Docker images → SSH
 
 ## Live Apps
 
-| App | Domain | Repo | Server path |
-|-----|--------|------|-------------|
-| invoicia | invoicia.eu | [terjetyl/invoicia](https://github.com/terjetyl/invoicia) | `/opt/invoicia` |
+| App       | Domain       | Repo                                                        | Server path      |
+| --------- | ------------ | ----------------------------------------------------------- | ---------------- |
+| invoicia  | invoicia.eu  | [terjetyl/invoicia](https://github.com/terjetyl/invoicia)   | `/opt/invoicia`  |
 | formvault | formvault.eu | [terjetyl/formvault](https://github.com/terjetyl/formvault) | `/opt/formvault` |
 
 ---
@@ -34,11 +34,12 @@ Traefik (Hetzner VPS, ports 80/443)
 ```
 
 **Key points:**
+
 - Traefik handles TLS — Caddy runs with `auto_https off`
 - Each app has its own Docker Compose stack in `/opt/<appname>/`
 - Docker images are built via GitHub Actions and pushed to GHCR
 - Secrets & config are written to `.env.prod` on the server by the deploy workflow
-- DB migrations run automatically before the API starts (or via `dist/migrate.js`)
+- DB migrations run **as part of every deploy**, before the API starts — never manually on the server
 
 ---
 
@@ -47,6 +48,7 @@ Traefik (Hetzner VPS, ports 80/443)
 ### 1. DNS
 
 Add DNS A records:
+
 ```
 <app>.eu       → <server-ip>
 api.<app>.eu   → <server-ip>   # if using a separate API domain
@@ -71,26 +73,26 @@ In the GitHub repo → Settings → Environments → New environment → name it
 
 **Variables** (adapt per app):
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `APP_HOSTNAME` | Main domain | `formvault.eu` |
-| `API_HOSTNAME` | API domain | `api.formvault.eu` |
-| `ACME_EMAIL` | Let's Encrypt email | `terje@example.com` |
-| `SERVER_HOST` | Hetzner server IP | `1.2.3.4` |
-| `SERVER_USER` | SSH user on server | `deploy` |
-| `POSTGRES_USER` | DB user (optional) | `formvault` |
-| `POSTGRES_DB` | DB name (optional) | `formvault_db` |
-| `FJORDID_URL` | FjordID base URL | `https://auth.fjordid.eu` |
-| `FJORDID_REALM` | FjordID realm | `fjordid` |
-| `FJORDID_API_CLIENT_ID` | API Keycloak client ID | `fjid_xxxxxxxx` |
-| `FJORDID_WEB_CLIENT_ID` | Web Keycloak client ID | `fjid_yyyyyyyy` |
+| Variable                | Description            | Example                   |
+| ----------------------- | ---------------------- | ------------------------- |
+| `APP_HOSTNAME`          | Main domain            | `formvault.eu`            |
+| `API_HOSTNAME`          | API domain             | `api.formvault.eu`        |
+| `ACME_EMAIL`            | Let's Encrypt email    | `terje@example.com`       |
+| `SERVER_HOST`           | Hetzner server IP      | `1.2.3.4`                 |
+| `SERVER_USER`           | SSH user on server     | `deploy`                  |
+| `POSTGRES_USER`         | DB user (optional)     | `formvault`               |
+| `POSTGRES_DB`           | DB name (optional)     | `formvault_db`            |
+| `FJORDID_URL`           | FjordID base URL       | `https://auth.fjordid.eu` |
+| `FJORDID_REALM`         | FjordID realm          | `fjordid`                 |
+| `FJORDID_API_CLIENT_ID` | API Keycloak client ID | `fjid_xxxxxxxx`           |
+| `FJORDID_WEB_CLIENT_ID` | Web Keycloak client ID | `fjid_yyyyyyyy`           |
 
 **Secrets**:
 
-| Secret | Description |
-|--------|-------------|
-| `SSH_PRIVATE_KEY` | Private key for server SSH access |
-| `POSTGRES_PASSWORD` | Database password |
+| Secret              | Description                       |
+| ------------------- | --------------------------------- |
+| `SSH_PRIVATE_KEY`   | Private key for server SSH access |
+| `POSTGRES_PASSWORD` | Database password                 |
 
 > Skip FjordID variables if the app has no auth.
 
@@ -130,7 +132,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-<appname>} -d ${POSTGRES_DB:-<appname>_db}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-<appname>} -d ${POSTGRES_DB:-<appname>_db}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -272,14 +278,85 @@ Key steps from the deploy job in `.github/workflows/deploy-production.yml`:
   run: |
     ssh ${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }} "
       cd /opt/<appname>
+
+      # 1. Pull new images
       docker compose -f docker-compose.prod.yml --env-file .env.prod pull
+
+      # 2. Start DB first, wait until healthy
       docker compose -f docker-compose.prod.yml --env-file .env.prod up -d db
-      # wait for db healthy, then run migrations
+      until docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T db sh -lc 'pg_isready -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"' >/dev/null 2>&1; do
+        sleep 2
+      done
+
+      # 3. Run migrations BEFORE starting the API (critical: never skip this)
       docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm api node dist/migrate.js
+
+      # 4. Start all services
       docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate
+
       docker image prune -f
     "
 ```
+
+---
+
+## Database Migrations
+
+Migrations are managed with **Drizzle Kit** and run automatically on every production deploy.
+
+### How it works
+
+1. `drizzle-kit generate:pg` creates SQL migration files in `apps/<api-dir>/drizzle/`
+2. The API Dockerfile copies the `drizzle/` folder into the image
+3. `dist/migrate.js` applies any pending migrations using Drizzle's migrate helper
+4. The deploy workflow runs `migrate.js` **before** starting the API container
+
+### The migrate script (`apps/<api-dir>/src/migrate.ts`)
+
+```typescript
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { Pool } from "pg";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const db = drizzle(pool);
+
+await migrate(db, { migrationsFolder: "./drizzle" });
+console.log("Migrations applied successfully");
+await pool.end();
+process.exit(0);
+```
+
+### Migration workflow
+
+```bash
+# 1. Make schema changes in src/db/schema.ts
+
+# 2. Generate migration file
+pnpm db:generate
+# Creates: drizzle/XXXX_<description>.sql
+
+# 3. Commit the migration file alongside the schema change
+git add drizzle/ src/db/schema.ts
+git commit -m "db: add <description>"
+
+# 4. Push to main → deploy workflow runs migrations automatically
+git push
+```
+
+### Rules
+
+- **Never edit existing migration files** — always generate a new one
+- **Always commit migration files** — they must be included in the Docker image
+- **Never run migrations manually on the server** — always go through the deploy workflow so migrations are tracked in git history
+- Migrations run in a one-off `docker compose run --rm api` container, not in the live API container, so the running API is unaffected until step 4
+- If a migration fails, the deploy stops before `up -d` — the old API version keeps running
+
+### Rolling back
+
+Drizzle does not auto-generate rollback scripts. To roll back:
+1. Write a new forward migration that reverses the change
+2. Deploy it normally
 
 ---
 
@@ -291,11 +368,12 @@ All apps that need authentication use **FjordID** (self-hosted Keycloak at `auth
 
 ```typescript
 // Fastify plugin: verify Bearer token from FjordID
-const JWKS_URL = `${FJORDID_URL}/realms/${FJORDID_REALM}/protocol/openid-connect/certs`
+const JWKS_URL = `${FJORDID_URL}/realms/${FJORDID_REALM}/protocol/openid-connect/certs`;
 // Use jose library to validate JWTs
 ```
 
 Environment variables the API needs:
+
 ```
 FJORDID_URL=https://auth.fjordid.eu
 FJORDID_REALM=fjordid
@@ -306,12 +384,14 @@ FJORDID_ALLOWED_AZP=fjid_yyyyyyyy      # Web client (allowed azp claim)
 ### Web/SPA side (OIDC login)
 
 Uses `oidc-client-ts` library:
+
 ```typescript
 // Auth config read from /config.js at runtime (injected by Caddy entrypoint)
 // This allows changing FjordID settings without rebuilding the image
 ```
 
 The Caddy `entrypoint.sh` generates `/srv/config.js` at container start:
+
 ```bash
 cat > /srv/config.js << EOF
 window.__config__ = {
@@ -349,6 +429,7 @@ ssh $SERVER_USER@$SERVER_HOST "cd /opt/<appname> && docker compose -f docker-com
 ```
 
 Or use the helper scripts from invoicia (copy to each app):
+
 ```bash
 ./infra/scripts/prod-logs.sh caddy
 ./infra/scripts/prod-logs.sh api
@@ -356,6 +437,7 @@ Or use the helper scripts from invoicia (copy to each app):
 ```
 
 Scripts need env vars:
+
 ```bash
 export INVOICIA_SSH_HOST="<server-ip>"
 export INVOICIA_SSH_USER="<user>"
@@ -363,13 +445,13 @@ export INVOICIA_SSH_USER="<user>"
 
 ### Common issues
 
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| `502 Bad Gateway` | API container down or DB not ready | Check API logs, verify DB healthy |
-| `Certificate error` | Traefik label wrong or DNS not propagated | Check Traefik labels in compose, wait for DNS |
-| Migration fails | DB not ready when migration runs | Check `depends_on` healthcheck config |
-| GHCR pull fails | GitHub token expired on server | Re-login: `echo $TOKEN \| docker login ghcr.io -u <user> --password-stdin` |
-| `401 Unauthorized` | FjordID client ID mismatch | Check `FJORDID_CLIENT_ID` and `FJORDID_ALLOWED_AZP` env vars |
+| Symptom             | Likely cause                              | Fix                                                                        |
+| ------------------- | ----------------------------------------- | -------------------------------------------------------------------------- |
+| `502 Bad Gateway`   | API container down or DB not ready        | Check API logs, verify DB healthy                                          |
+| `Certificate error` | Traefik label wrong or DNS not propagated | Check Traefik labels in compose, wait for DNS                              |
+| Migration fails     | DB not ready when migration runs          | Check `depends_on` healthcheck config                                      |
+| GHCR pull fails     | GitHub token expired on server            | Re-login: `echo $TOKEN \| docker login ghcr.io -u <user> --password-stdin` |
+| `401 Unauthorized`  | FjordID client ID mismatch                | Check `FJORDID_CLIENT_ID` and `FJORDID_ALLOWED_AZP` env vars               |
 
 ---
 
