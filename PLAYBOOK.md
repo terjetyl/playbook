@@ -118,11 +118,112 @@ Go to [auth.fjordid.eu](https://auth.fjordid.eu) → Realm `fjordid` → Clients
    - Valid redirect URIs: `https://<app>.eu/auth/callback`, `https://<app>.eu/`
    - Web Origins: `https://<app>.eu`
 
+#### MCP Server (GitHub Copilot)
+
+FjordID publishes an MCP server so Copilot can create and manage clients directly from the editor.
+
+1. Create an API key at [fjordid.eu/console/api-keys](https://fjordid.eu/console/api-keys) — format `fjak_...`.
+2. Add `.vscode/mcp.json` to the repo (add to `.gitignore` — the file contains a secret):
+
+```json
+{
+  "servers": {
+    "fjordid": {
+      "command": "npx",
+      "args": ["-y", "@fjordid/mcp"],
+      "env": { "FJORDID_API_KEY": "fjak_your_key_here" }
+    }
+  }
+}
+```
+
+3. Restart VS Code — Copilot can now call:
+   - `fjordid_list_apps`, `fjordid_get_app`
+   - `fjordid_create_app`, `fjordid_update_app`, `fjordid_delete_app`
+   - `fjordid_add_redirect_uri`, `fjordid_remove_redirect_uri`
+   - `fjordid_rotate_secret`
+   - `fjordid_suggest_config` (AI-powered config recommendation)
+
+> The API key gives full access to your FjordID account — never commit it. Add `.vscode/mcp.json` to `.gitignore`.
+
 ### 3. GitHub Environment
 
-In the GitHub repo → Settings → Environments → New environment → name it `production`.
+All environment variables and secrets are configured via the **GitHub CLI** (`gh`). The UI approach is error-prone — use the commands below instead.
 
-**Variables** (adapt per app):
+#### Prerequisites
+
+```bash
+# Verify gh is installed
+gh --version
+
+# Verify you're authenticated
+gh auth status
+
+# If not logged in:
+gh auth login
+```
+
+#### Create the environment
+
+```bash
+gh api repos/terjetyl/<appname>/environments/production --method PUT
+```
+
+#### Get the SSH private key from your dev machine
+
+The deploy user's SSH key already exists on your dev machine (you use it for passwordless access to the server). Grab it directly:
+
+```bash
+# Find which key is configured for the server
+ssh -G <server-ip> | grep identityfile
+
+# Print the private key (use the path from the command above, typically id_ed25519 or id_rsa)
+cat ~/.ssh/id_ed25519
+```
+
+Copy the full output (including `-----BEGIN...` and `-----END...` lines) for the next step.
+
+#### Set secrets
+
+```bash
+REPO="terjetyl/<appname>"
+ENV="production"
+
+# SSH key: pipe directly so the multi-line value is set correctly
+cat ~/.ssh/id_ed25519 | gh secret set SSH_PRIVATE_KEY --env "$ENV" --repo "$REPO"
+
+gh secret set POSTGRES_PASSWORD --env "$ENV" --repo "$REPO" --body "changeme-strong-password"
+```
+
+#### Set variables
+
+```bash
+REPO="terjetyl/<appname>"
+ENV="production"
+
+gh variable set APP_HOSTNAME          --env "$ENV" --repo "$REPO" --body "<app>.eu"
+gh variable set API_HOSTNAME          --env "$ENV" --repo "$REPO" --body "api.<app>.eu"
+gh variable set ACME_EMAIL            --env "$ENV" --repo "$REPO" --body "terje@example.com"
+gh variable set SERVER_HOST           --env "$ENV" --repo "$REPO" --body "<server-ip>"
+gh variable set SERVER_USER           --env "$ENV" --repo "$REPO" --body "deploy"
+gh variable set POSTGRES_USER         --env "$ENV" --repo "$REPO" --body "<appname>"
+gh variable set POSTGRES_DB           --env "$ENV" --repo "$REPO" --body "<appname>_db"
+
+# FjordID — skip if app has no auth
+gh variable set FJORDID_URL           --env "$ENV" --repo "$REPO" --body "https://auth.fjordid.eu"
+gh variable set FJORDID_REALM         --env "$ENV" --repo "$REPO" --body "fjordid"
+gh variable set FJORDID_API_CLIENT_ID --env "$ENV" --repo "$REPO" --body "fjid_xxxxxxxx"
+gh variable set FJORDID_WEB_CLIENT_ID --env "$ENV" --repo "$REPO" --body "fjid_yyyyyyyy"
+```
+
+#### Verify
+
+```bash
+gh variable list --env production --repo "$REPO"
+gh secret list  --env production --repo "$REPO"
+```
+
+**Variable reference** (for documentation purposes):
 
 | Variable                | Description            | Example                   |
 | ----------------------- | ---------------------- | ------------------------- |
@@ -138,14 +239,10 @@ In the GitHub repo → Settings → Environments → New environment → name it
 | `FJORDID_API_CLIENT_ID` | API Keycloak client ID | `fjid_xxxxxxxx`           |
 | `FJORDID_WEB_CLIENT_ID` | Web Keycloak client ID | `fjid_yyyyyyyy`           |
 
-**Secrets**:
-
 | Secret              | Description                       |
 | ------------------- | --------------------------------- |
 | `SSH_PRIVATE_KEY`   | Private key for server SSH access |
 | `POSTGRES_PASSWORD` | Database password                 |
-
-> Skip FjordID variables if the app has no auth.
 
 ### 4. Infra Files in the Repo
 
@@ -162,6 +259,8 @@ infra/
       Dockerfile         # Caddy + SPA build
       entrypoint.sh      # Generates /config.js for SPA at runtime
 docker-compose.prod.yml  # Production Compose stack
+.vscode/
+  mcp.json               # FjordID MCP server (gitignored — contains API key)
 .github/
   copilot-instructions.md # Copilot context: links to shared playbook
   workflows/
@@ -479,6 +578,24 @@ window.__config__ = {
 };
 EOF
 ```
+
+### MCP Server
+
+FjordID ships `@fjordid/mcp` — an MCP server for managing clients via Copilot. Configure it in `.vscode/mcp.json` (gitignored):
+
+```json
+{
+  "servers": {
+    "fjordid": {
+      "command": "npx",
+      "args": ["-y", "@fjordid/mcp"],
+      "env": { "FJORDID_API_KEY": "fjak_your_key_here" }
+    }
+  }
+}
+```
+
+Get your API key from [fjordid.eu/console/api-keys](https://fjordid.eu/console/api-keys). With this in place you can ask Copilot to create clients, rotate secrets, or add redirect URIs without leaving VS Code.
 
 ---
 
@@ -991,10 +1108,14 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 [ ] .github/copilot-instructions.md created (links to shared playbook)
 [ ] infra/ files created (Caddyfile.prod, Dockerfiles, docker-compose.prod.yml)
 [ ] GitHub Actions workflows added (ci.yml, deploy-production.yml)
-[ ] GitHub Environment "production" created with all vars + secrets
+[ ] gh auth status confirms GitHub CLI is authenticated
+[ ] GitHub Environment "production" created (gh api ... --method PUT)
+[ ] SSH_PRIVATE_KEY secret set via gh (piped from ~/.ssh/id_ed25519)
+[ ] POSTGRES_PASSWORD secret set via gh
+[ ] All variables set via gh variable set && verified with gh variable list
 [ ] FjordID clients created (if auth needed)
-[ ] SSH_PRIVATE_KEY secret added (reuse same key as invoicia)
-[ ] POSTGRES_PASSWORD secret set
+[ ] FjordID API key created (fjordid.eu/console/api-keys) and added to .vscode/mcp.json
+[ ] .vscode/mcp.json added to .gitignore
 [ ] vitest installed and vitest.config.ts added to API package
 [ ] docker-compose.test.yml added for local integration test DB
 [ ] src/test/helpers.ts created (createTestApp, teardown, resetDb)
