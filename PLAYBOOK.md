@@ -350,11 +350,18 @@ services:
       - "traefik.docker.network=fjordid_traefik"
       - "traefik.http.routers.<appname>-web.rule=Host(`${APP_HOSTNAME}`)"
       - "traefik.http.routers.<appname>-web.entrypoints=websecure"
+      - "traefik.http.routers.<appname>-web.tls.certresolver=letsencrypt"
       # ...additional Traefik labels
     networks:
       - default
       - fjordid_traefik
     restart: unless-stopped
+
+# ⚠️ Traefik TLS Note:
+# Using `tls=true` alone causes Traefik to issue a self-signed certificate.
+# You MUST set `tls.certresolver=<name>` to use Let's Encrypt.
+# The resolver name depends on your Traefik config — check with:
+#   docker inspect <traefik-container> | grep certresolver
 
 volumes:
   postgres_data:
@@ -448,13 +455,25 @@ Key steps from the deploy job in `.github/workflows/deploy-production.yml`:
 - name: Create production environment file
   run: |
     ssh ${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }} << 'SSH_EOF'
-    cat > /opt/<appname>/.env.prod << 'END'
-    APP_HOSTNAME=${{ vars.APP_HOSTNAME }}
-    ...all vars and secrets...
-    API_IMAGE=${{ needs.build-images.outputs.api-image }}
-    CADDY_IMAGE=${{ needs.build-images.outputs.caddy-image }}
-    END
+    set -eu
+    PGUSER='${{ vars.POSTGRES_USER }}'
+    PGPASS='${{ secrets.POSTGRES_PASSWORD }}'
+    PGDB='${{ vars.POSTGRES_DB }}'
+    printf '%s\n' \
+      "APP_HOSTNAME=${{ vars.APP_HOSTNAME }}" \
+      "POSTGRES_USER=${PGUSER}" \
+      "POSTGRES_PASSWORD=${PGPASS}" \
+      "POSTGRES_DB=${PGDB}" \
+      "DATABASE_URL=postgresql://${PGUSER}:${PGPASS}@db:5432/${PGDB}" \
+      "API_IMAGE=${{ needs.build-images.outputs.api-image }}" \
+      "CADDY_IMAGE=${{ needs.build-images.outputs.caddy-image }}" \
+      > /opt/<appname>/.env.prod
     SSH_EOF
+
+# ⚠️ Heredoc Warning:
+# Do NOT write long values like DATABASE_URL as a single line in a heredoc.
+# Code formatters and YAML linters will wrap long lines, inserting a literal
+# newline mid-value. Instead, assemble the URL from shell variables using printf.
 
 - name: Deploy application
   run: |
