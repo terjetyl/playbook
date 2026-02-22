@@ -123,12 +123,38 @@ infra/
       entrypoint.sh      # Generates /config.js for SPA at runtime
 docker-compose.prod.yml  # Production Compose stack
 .github/
+  copilot-instructions.md # Copilot context: links to shared playbook
   workflows/
     ci.yml               # Test + typecheck on every PR/push
     deploy-production.yml # Build GHCR images + SSH deploy
 ```
 
-### 5. docker-compose.prod.yml Pattern
+### 5. GitHub Copilot Instructions
+
+Every repo gets a `.github/copilot-instructions.md` that points Copilot at this shared playbook so all AI assistance is consistent across projects.
+
+```markdown
+# Copilot Instructions
+
+This project follows the shared production playbook.
+Read and apply the conventions, patterns, and rules described in:
+
+https://raw.githubusercontent.com/terjetyl/playbook/refs/heads/main/PLAYBOOK.md
+
+Key things to be aware of:
+
+- pnpm monorepo (apps/api, apps/web, packages/shared)
+- Fastify API with Drizzle ORM + Postgres
+- Docker Compose + Traefik + Caddy for production
+- Migrations run automatically on every deploy via `dist/migrate.js` — never manually
+- Auth via FjordID (self-hosted Keycloak) — verify JWTs with jose
+- Tests: Vitest for unit tests, real Postgres for integration tests (never mock the DB)
+- All secrets via GitHub Environment variables — never hardcoded
+```
+
+Update the bullet points with anything app-specific (e.g. domain, special env vars, notable business rules).
+
+### 6. docker-compose.prod.yml Pattern
 
 Services needed for every app:
 
@@ -193,7 +219,7 @@ networks:
     external: true
 ```
 
-### 6. Caddyfile.prod Pattern
+### 7. Caddyfile.prod Pattern
 
 ```caddy
 {
@@ -222,7 +248,7 @@ networks:
 }
 ```
 
-### 7. API Dockerfile Pattern
+### 8. API Dockerfile Pattern
 
 ```dockerfile
 FROM node:22-slim AS build
@@ -258,7 +284,7 @@ EXPOSE 3002
 CMD ["node", "dist/server.js"]
 ```
 
-### 8. Deploy Workflow Pattern
+### 9. Deploy Workflow Pattern
 
 Key steps from the deploy job in `.github/workflows/deploy-production.yml`:
 
@@ -921,6 +947,7 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 [ ] DNS A record pointing to server IP
 [ ] GitHub repo created
 [ ] pnpm monorepo structure set up (apps/api, apps/web, packages/shared)
+[ ] .github/copilot-instructions.md created (links to shared playbook)
 [ ] infra/ files created (Caddyfile.prod, Dockerfiles, docker-compose.prod.yml)
 [ ] GitHub Actions workflows added (ci.yml, deploy-production.yml)
 [ ] GitHub Environment "production" created with all vars + secrets
