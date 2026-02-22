@@ -58,11 +58,51 @@ For more details, see [GitHub Dependabot documentation](https://docs.github.com/
 
 ### 1. DNS
 
-Add DNS A records:
+#### Register the domain (Gandi.net)
 
+1. Go to [gandi.net](https://www.gandi.net) → search for `<app>.eu` → purchase.
+2. The domain will appear in **Domain** → your account namespace.
+
+#### Configure DNS records
+
+Gandi.net uses its own DNS by default. Update records via **Domain → `<app>.eu` → DNS Records**:
+
+| Type | Name  | Value         | TTL |
+| ---- | ----- | ------------- | --- | ---------------------------------------- |
+| A    | `@`   | `<server-ip>` | 3h  |
+| A    | `api` | `<server-ip>` | 3h  | ← only if using a separate API subdomain |
+| A    | `www` | `<server-ip>` | 3h  | ← optional redirect via Caddy            |
+
+> TTL `3h` (10800s) is fine for production. Use `5m` (300s) during initial setup so you can correct mistakes quickly, then raise it.
+
+#### Gandi DNS via LiveDNS API (optional automation)
+
+If you prefer CLI over the UI:
+
+```bash
+# Set an A record using the Gandi LiveDNS API
+curl -s -X PUT \
+  -H "Authorization: Bearer <GANDI_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"rrset_values": ["<server-ip>"], "rrset_ttl": 10800}' \
+  "https://api.gandi.net/v5/livedns/domains/<app>.eu/records/@/A"
+
+# And for the api subdomain
+curl -s -X PUT \
+  -H "Authorization: Bearer <GANDI_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"rrset_values": ["<server-ip>"], "rrset_ttl": 10800}' \
+  "https://api.gandi.net/v5/livedns/domains/<app>.eu/records/api/A"
 ```
-<app>.eu       → <server-ip>
-api.<app>.eu   → <server-ip>   # if using a separate API domain
+
+Get your API key: **Gandi account → Security → Developer access → Personal Access Token**.
+
+#### Verify propagation
+
+```bash
+dig +short <app>.eu A
+dig +short api.<app>.eu A
+# Both should return <server-ip>. Traefik will not issue a TLS cert until DNS resolves.
 ```
 
 ### 2. FjordID (if app needs auth)
@@ -943,8 +983,9 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 ## New App Launch Checklist
 
 ```
-[ ] Domain registered (e.g. formvault.eu)
-[ ] DNS A record pointing to server IP
+[ ] Domain registered on Gandi.net (e.g. formvault.eu)
+[ ] DNS A records added in Gandi LiveDNS (@ and api subdomain → server IP)
+[ ] DNS propagation verified (dig +short <app>.eu returns server IP)
 [ ] GitHub repo created
 [ ] pnpm monorepo structure set up (apps/api, apps/web, packages/shared)
 [ ] .github/copilot-instructions.md created (links to shared playbook)
