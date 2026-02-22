@@ -10,6 +10,8 @@ All apps follow the same pattern: **pnpm monorepo → GHCR Docker images → SSH
 | invoicia  | invoicia.eu  | [terjetyl/invoicia](https://github.com/terjetyl/invoicia)   | `/opt/invoicia`  |
 | formvault | formvault.eu | [terjetyl/formvault](https://github.com/terjetyl/formvault) | `/opt/formvault` |
 
+**Production server IP:** `46.225.16.76`
+
 ---
 
 ## Architecture
@@ -1029,6 +1031,8 @@ jobs:
 ---
 
 ## Production Debugging
+
+> **Note:** For easier debugging of production issues, use passwordless SSH to get logs from the server. Set up SSH key authentication once, then all the commands below run without password prompts.
 
 ### Check container status
 
