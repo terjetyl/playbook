@@ -43,6 +43,17 @@ Traefik (Hetzner VPS, ports 80/443)
 
 ---
 
+## GitHub Dependabot
+
+Dependabot automates dependency updates and security patches for all repositories. To enable:
+
+1. Add a `.github/dependabot.yml` file to configure update frequency and package ecosystems.
+2. Review and merge Dependabot PRs regularly to keep dependencies secure and up-to-date.
+
+For more details, see [GitHub Dependabot documentation](https://docs.github.com/en/code-security/dependabot).
+
+---
+
 ## Checklist: Deploying a New App
 
 ### 1. DNS
@@ -355,6 +366,7 @@ git push
 ### Rolling back
 
 Drizzle does not auto-generate rollback scripts. To roll back:
+
 1. Write a new forward migration that reverses the change
 2. Deploy it normally
 
