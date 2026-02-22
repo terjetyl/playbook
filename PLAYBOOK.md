@@ -1151,3 +1151,31 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 2. Verify domain ownership (recommended: DNS TXT record method).
 3. Submit the sitemap (e.g., `/sitemap.xml`) if available.
 4. Monitor indexing status and resolve any coverage or enhancement issues.
+
+---
+
+## 3rd Party Integrations
+
+### Email - Brevo
+
+For apps requiring email functionality, we use [Brevo](https://www.brevo.com/) (formerly Sendinblue).
+
+**Setup:**
+
+1. Create a Brevo account or use existing account.
+2. Generate an API key from **Settings → SMTP & API → API Keys**.
+3. Add the API key to environment secrets (e.g., `BREVO_API_KEY`).
+4. Use Brevo's REST API or SMTP relay for sending transactional emails.
+
+### Payments - Stripe
+
+For payment processing, we use [Stripe](https://stripe.com/).
+
+**Setup:**
+
+1. Create a Stripe account or use existing account.
+2. Get API keys from **Developers → API keys** (use test keys for development, live keys for production).
+3. Add keys to environment secrets (e.g., `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`).
+4. Configure webhook endpoints for payment events (e.g., `checkout.session.completed`).
+5. Add webhook signing secret to environment (e.g., `STRIPE_WEBHOOK_SECRET`).
+6. Monitor indexing status and resolve any coverage or enhancement issues.
