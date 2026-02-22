@@ -3,6 +3,10 @@
 Personal runbook for deploying apps on the shared Hetzner server.
 All apps follow the same pattern: **pnpm monorepo → GHCR Docker images → SSH deploy → Docker Compose → Traefik (TLS) + Caddy (SPA+API proxy) + Postgres**.
 
+Use this playbook to get a new web app up and running fast with a solid foundation. After completing the steps, most of the baseline setup should be in place so you can focus on adding features.
+
+**Tip:** Add a `ROADMAP.md` file early to track planned work, milestones, and scope decisions.
+
 ## Live Apps
 
 | App       | Domain       | Repo                                                        | Server path      |
