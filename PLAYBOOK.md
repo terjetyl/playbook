@@ -1154,6 +1154,88 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 
 ---
 
+## SEO
+
+For projects that need search engine visibility, implement these SEO best practices:
+
+### Meta Tags
+
+Add essential meta tags to your HTML `<head>`:
+
+```html
+<title>Page Title - Brand Name</title>
+<meta
+  name="description"
+  content="Concise description (150-160 characters) that appears in search results"
+/>
+<meta name="keywords" content="relevant, keywords, separated, by, commas" />
+
+<!-- Open Graph (Facebook, LinkedIn) -->
+<meta property="og:title" content="Page Title" />
+<meta property="og:description" content="Description for social shares" />
+<meta property="og:image" content="https://yourdomain.com/og-image.jpg" />
+<meta property="og:url" content="https://yourdomain.com/page" />
+<meta property="og:type" content="website" />
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Page Title" />
+<meta name="twitter:description" content="Description for Twitter shares" />
+<meta name="twitter:image" content="https://yourdomain.com/twitter-image.jpg" />
+```
+
+### Sitemap
+
+Generate and serve a sitemap at `/sitemap.xml`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://yourdomain.com/</loc>
+    <lastmod>2026-02-22</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://yourdomain.com/page</loc>
+    <lastmod>2026-02-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+</urlset>
+```
+
+Submit the sitemap to Google Search Console after deployment.
+
+### Robots.txt
+
+Serve a `/robots.txt` file to control crawler access:
+
+```
+User-agent: *
+Allow: /
+Sitemap: https://yourdomain.com/sitemap.xml
+```
+
+### Performance & Technical SEO
+
+- **Fast load times**: Optimize images, lazy-load assets, minimize JavaScript.
+- **Mobile responsive**: Ensure the site works well on all device sizes.
+- **HTTPS**: Always use TLS/SSL (handled by Traefik in our setup).
+- **Semantic HTML**: Use proper heading hierarchy (h1, h2, h3) and semantic tags.
+- **Clean URLs**: Use readable paths like `/blog/post-title` instead of `/blog?id=123`.
+
+### Content Best Practices
+
+- **Unique titles and descriptions** for each page.
+- **H1 tag** on every page with the main topic.
+- **Alt text** for all images.
+- **Internal linking** between related pages.
+- **Regular content updates** signal freshness to search engines.
+
+---
+
 ## 3rd Party Integrations
 
 ### Email - Brevo
