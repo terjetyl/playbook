@@ -416,6 +416,435 @@ EOF
 
 ---
 
+## Testing
+
+All apps use **Vitest** for both unit and integration tests. Integration tests run against a real ephemeral Postgres — never mock the database.
+
+### Setup
+
+```bash
+# Install in the API package
+pnpm --filter @<scope>/api add -D vitest @vitest/coverage-v8
+```
+
+`apps/<api-dir>/vitest.config.ts`:
+
+```typescript
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: "node",
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html"],
+      include: ["src/**/*.ts"],
+      exclude: ["src/**/*.test.ts", "src/test/**"],
+    },
+  },
+});
+```
+
+`apps/<api-dir>/package.json` scripts:
+
+```json
+{
+  "scripts": {
+    "test": "vitest run",
+    "test:unit": "vitest run --testPathPattern='\\.test\\.ts$' --exclude='**/integration/**'",
+    "test:integration": "vitest run src/test/integration",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  }
+}
+```
+
+### File Structure
+
+```
+apps/api/
+  src/
+    routes/
+      invoices.ts
+      invoices.test.ts          ← integration test (uses real DB)
+    services/
+      invoice-service.ts
+      invoice-service.test.ts   ← unit test (mocks repo)
+    utils/
+      format.ts
+      format.test.ts
+    test/
+      helpers.ts                ← shared test app factory + teardown
+      integration/
+        health.test.ts
+        migrations.test.ts
+  docker-compose.test.yml       ← ephemeral Postgres for local integration tests
+  vitest.config.ts
+```
+
+### Unit Tests — Service Layer
+
+Unit tests cover pure business logic without touching the DB or network. Mock any repository dependencies.
+
+```typescript
+// apps/api/src/services/invoice-service.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { InvoiceService } from "./invoice-service";
+
+const mockRepo = {
+  findById: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  delete: vi.fn(),
+  findByUser: vi.fn(),
+};
+
+describe("InvoiceService", () => {
+  let service: InvoiceService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    service = new InvoiceService(mockRepo);
+  });
+
+  it("returns null when invoice not found", async () => {
+    mockRepo.findById.mockResolvedValue(null);
+    const result = await service.getById("non-existent-id");
+    expect(result).toBeNull();
+  });
+
+  it("throws when creating invoice with zero amount", async () => {
+    await expect(
+      service.create({ title: "Bad invoice", amount: 0 }),
+    ).rejects.toThrow("Amount must be greater than zero");
+  });
+});
+```
+
+For pure functions (calculations, formatters):
+
+```typescript
+// apps/api/src/utils/format.test.ts
+import { describe, it, expect } from "vitest";
+import { calculateTotal } from "./format";
+
+describe("calculateTotal", () => {
+  it("sums line items correctly", () => {
+    const items = [
+      { quantity: 2, unitPrice: 100 },
+      { quantity: 1, unitPrice: 50 },
+    ];
+    expect(calculateTotal(items)).toBe(250);
+  });
+
+  it("returns 0 for empty items", () => {
+    expect(calculateTotal([])).toBe(0);
+  });
+});
+```
+
+### Integration Tests — API Routes
+
+Integration tests send real HTTP requests via Fastify's `inject` against the full app instance (plugins, auth, DB).
+
+#### Test DB — Local
+
+```yaml
+# apps/api/docker-compose.test.yml
+services:
+  db-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test_db
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data # fast in-memory storage, no persistence needed
+```
+
+```bash
+# Start test DB, run integration tests, tear down
+docker compose -f docker-compose.test.yml up -d
+DATABASE_URL=postgres://test:test@localhost:5433/test_db pnpm test:integration
+docker compose -f docker-compose.test.yml down -v
+```
+
+#### Test Helpers (`src/test/helpers.ts`)
+
+```typescript
+import { buildApp } from "../app";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { Pool } from "pg";
+import * as schema from "../db/schema";
+
+export async function createTestApp() {
+  const pool = new Pool({
+    connectionString:
+      process.env.DATABASE_URL ?? "postgres://test:test@localhost:5433/test_db",
+  });
+  const db = drizzle(pool, { schema });
+
+  // Apply all pending migrations to the test DB
+  await migrate(db, { migrationsFolder: "./drizzle" });
+
+  const app = buildApp({ db });
+  await app.ready();
+
+  return { app, db, pool };
+}
+
+export async function teardown(ctx: Awaited<ReturnType<typeof createTestApp>>) {
+  await ctx.app.close();
+  await ctx.pool.end();
+}
+
+/** Truncate all app tables between tests to keep them isolated */
+export async function resetDb(ctx: Awaited<ReturnType<typeof createTestApp>>) {
+  await ctx.db.execute(
+    sql`TRUNCATE TABLE invoices, users RESTART IDENTITY CASCADE`,
+  );
+}
+```
+
+#### Critical: Health Endpoint (`src/test/integration/health.test.ts`)
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { createTestApp, teardown } from "../helpers";
+
+describe("GET /api/health", () => {
+  let ctx: Awaited<ReturnType<typeof createTestApp>>;
+
+  beforeAll(async () => {
+    ctx = await createTestApp();
+  });
+  afterAll(async () => {
+    await teardown(ctx);
+  });
+
+  it("returns 200 with status ok", async () => {
+    const res = await ctx.app.inject({ method: "GET", url: "/api/health" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: "ok" });
+  });
+
+  it("health check confirms DB is reachable", async () => {
+    const res = await ctx.app.inject({ method: "GET", url: "/api/health" });
+    // If DB is unreachable the health route should return 503
+    expect(res.statusCode).not.toBe(503);
+  });
+});
+```
+
+#### Critical: Migration Idempotency (`src/test/integration/migrations.test.ts`)
+
+```typescript
+import { describe, it, expect } from "vitest";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { Pool } from "pg";
+
+describe("DB migrations", () => {
+  it("can apply migrations twice without error (idempotency)", async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const db = drizzle(pool);
+
+    // First run
+    await migrate(db, { migrationsFolder: "./drizzle" });
+    // Second run — must be a no-op, not throw
+    await expect(
+      migrate(db, { migrationsFolder: "./drizzle" }),
+    ).resolves.not.toThrow();
+
+    await pool.end();
+  });
+});
+```
+
+#### Authenticated Routes
+
+Mock the FjordID JWT verification at the plugin level so integration tests don't depend on a live Keycloak:
+
+```typescript
+// apps/api/src/routes/invoices.test.ts
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
+import { createTestApp, teardown, resetDb } from "../test/helpers";
+
+// Mock JWT verification — replace with vi.mock pointing at your actual auth plugin path
+vi.mock("../plugins/auth", () => ({
+  verifyToken: vi.fn().mockResolvedValue({
+    sub: "user-123",
+    email: "test@example.com",
+  }),
+}));
+
+describe("Invoices API", () => {
+  let ctx: Awaited<ReturnType<typeof createTestApp>>;
+
+  beforeAll(async () => {
+    ctx = await createTestApp();
+  });
+  afterAll(async () => {
+    await teardown(ctx);
+  });
+  beforeEach(async () => {
+    await resetDb(ctx);
+  });
+
+  it("GET /api/invoices returns empty list for new user", async () => {
+    const res = await ctx.app.inject({
+      method: "GET",
+      url: "/api/invoices",
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+  });
+
+  it("POST /api/invoices creates an invoice", async () => {
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: "Bearer test-token" },
+      payload: { title: "Test Invoice", amount: 1000 },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ title: "Test Invoice", amount: 1000 });
+  });
+
+  it("GET /api/invoices/:id returns 404 for unknown id", async () => {
+    const res = await ctx.app.inject({
+      method: "GET",
+      url: "/api/invoices/00000000-0000-0000-0000-000000000000",
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects request without auth token", async () => {
+    const res = await ctx.app.inject({
+      method: "GET",
+      url: "/api/invoices",
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+```
+
+#### Critical: Auth Middleware
+
+```typescript
+// apps/api/src/plugins/auth.test.ts
+import { describe, it, expect, vi } from "vitest";
+import { verifyFjordToken } from "./auth";
+import * as jose from "jose";
+
+vi.mock("jose");
+
+describe("verifyFjordToken", () => {
+  it("throws 401 when token is expired", async () => {
+    vi.mocked(jose.jwtVerify).mockRejectedValue(
+      new jose.errors.JWTExpired("JWT expired"),
+    );
+    await expect(verifyFjordToken("expired.token.here")).rejects.toMatchObject({
+      statusCode: 401,
+    });
+  });
+
+  it("throws 401 when token is malformed", async () => {
+    vi.mocked(jose.jwtVerify).mockRejectedValue(new jose.errors.JWTInvalid());
+    await expect(verifyFjordToken("bad-token")).rejects.toMatchObject({
+      statusCode: 401,
+    });
+  });
+});
+```
+
+### Critical Paths — Always Test
+
+| Path                                         | Type        | Why                                                                    |
+| -------------------------------------------- | ----------- | ---------------------------------------------------------------------- |
+| `GET /api/health`                            | Integration | Confirms app boots and DB is reachable                                 |
+| JWT auth middleware                          | Unit        | Must reject expired/malformed tokens                                   |
+| DB migration idempotency                     | Integration | Migrations run on every deploy — must never fail on re-run             |
+| Core CRUD routes (list, create, get, delete) | Integration | The primary user-facing paths                                          |
+| Business logic / calculations                | Unit        | e.g. totals, tax — correctness is critical                             |
+| `401` for unauthenticated requests           | Integration | Security — never let protected routes return 200 without a valid token |
+
+### CI: Tests in GitHub Actions
+
+Add to `.github/workflows/ci.yml`:
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm --filter @<scope>/api typecheck
+
+      - name: Unit tests
+        run: pnpm --filter @<scope>/api test:unit
+
+      - name: Integration tests
+        run: pnpm --filter @<scope>/api test:integration
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test_db
+```
+
+### Rules
+
+- Unit tests live as `.test.ts` siblings to the file they test
+- Integration tests that need a DB live in `src/test/integration/` or alongside the route as `routes/<name>.test.ts`
+- **Never mock the DB in integration tests** — always use a real Postgres
+- **Always mock external services** (FjordID JWT verification, email, etc.) in integration tests — no live network calls in CI
+- Each integration test file is fully isolated: reset tables in `beforeEach`, not just `beforeAll`
+- CI runs unit tests before integration tests — a unit failure fails fast before spinning up Postgres
+- `test:unit` and `test:integration` are separate scripts so they can run independently
+
+---
+
 ## Production Debugging
 
 ### Check container status
@@ -498,6 +927,15 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 [ ] FjordID clients created (if auth needed)
 [ ] SSH_PRIVATE_KEY secret added (reuse same key as invoicia)
 [ ] POSTGRES_PASSWORD secret set
+[ ] vitest installed and vitest.config.ts added to API package
+[ ] docker-compose.test.yml added for local integration test DB
+[ ] src/test/helpers.ts created (createTestApp, teardown, resetDb)
+[ ] Health endpoint integration test passing (GET /api/health → 200)
+[ ] Migration idempotency test passing
+[ ] Auth middleware unit tests passing (reject expired/malformed tokens)
+[ ] Core CRUD route integration tests passing
+[ ] CI test job configured in ci.yml with Postgres service
+[ ] CI passes (unit + integration) before first deploy
 [ ] First deploy triggered (push to main)
 [ ] Health check endpoint returns 200 (GET /api/health)
 [ ] FjordID login works end-to-end
