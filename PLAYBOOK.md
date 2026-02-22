@@ -503,3 +503,20 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 [ ] FjordID login works end-to-end
 [ ] Traefik TLS cert issued (check https:// in browser)
 ```
+
+---
+
+## Google Analytics & Google Search Console
+
+### Google Analytics
+
+1. Go to [Google Analytics](https://analytics.google.com/) and create a new property for the app domain.
+2. Add the provided GA4 Measurement ID to your frontend (e.g., via environment variable or directly in the analytics integration).
+3. Verify that page views and events are tracked in the Analytics dashboard.
+
+### Google Search Console
+
+1. Go to [Google Search Console](https://search.google.com/search-console/about) and add the app domain as a new property.
+2. Verify domain ownership (recommended: DNS TXT record method).
+3. Submit the sitemap (e.g., `/sitemap.xml`) if available.
+4. Monitor indexing status and resolve any coverage or enhancement issues.
