@@ -1160,13 +1160,25 @@ ssh $SERVER_USER@$SERVER_HOST "docker exec \$(docker ps -qf name=<appname>-db) p
 
 ---
 
-## Google Analytics & Google Search Console
+## Analytics & Google Search Console
 
-### Google Analytics
+### Umami (Self-hosted)
 
-1. Go to [Google Analytics](https://analytics.google.com/) and create a new property for the app domain.
-2. Add the provided GA4 Measurement ID to your frontend (e.g., via environment variable or directly in the analytics integration).
-3. Verify that page views and events are tracked in the Analytics dashboard.
+We use [Umami](https://umami.is/) for privacy-first, GDPR-compliant analytics — no cookies, no data sharing with third parties. The instance is hosted at [analytics.fjordid.eu](https://analytics.fjordid.eu/).
+
+1. Log in to [analytics.fjordid.eu](https://analytics.fjordid.eu/) and add a new website for the app domain.
+2. Copy the tracking script snippet — it will look like:
+   ```html
+   <script
+     defer
+     src="https://analytics.fjordid.eu/script.js"
+     data-website-id="<your-website-id>"
+   ></script>
+   ```
+3. Add the snippet to the `<head>` of your frontend (e.g., in `index.html` or the root layout).
+4. Verify that page views are appearing in the Umami dashboard.
+
+> **Note:** Umami does not require cookie consent banners as it does not use cookies or collect personal data.
 
 ### Google Search Console
 
