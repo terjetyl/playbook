@@ -1284,15 +1284,55 @@ For apps requiring email functionality, we use [Brevo](https://www.brevo.com/) (
 3. Add the API key to environment secrets (e.g., `BREVO_API_KEY`).
 4. Use Brevo's REST API or SMTP relay for sending transactional emails.
 
-### Payments - Stripe
+### Payments - Mollie
 
-For payment processing, we use [Stripe](https://stripe.com/).
+For payment processing, we use [Mollie](https://www.mollie.com/) — an EU-based payment provider (Netherlands) that supports cards, iDEAL, SEPA Direct Debit, Klarna, and more. GDPR-compliant, no US data transfer.
 
 **Setup:**
 
-1. Create a Stripe account or use existing account.
-2. Get API keys from **Developers → API keys** (use test keys for development, live keys for production).
-3. Add keys to environment secrets (e.g., `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`).
-4. Configure webhook endpoints for payment events (e.g., `checkout.session.completed`).
-5. Add webhook signing secret to environment (e.g., `STRIPE_WEBHOOK_SECRET`).
-6. Monitor indexing status and resolve any coverage or enhancement issues.
+1. Log in to the [Mollie dashboard](https://www.mollie.com/dashboard) and grab your API keys from **Developers → API keys**.
+2. Add keys to environment secrets:
+   - `MOLLIE_API_KEY` — use `test_...` for development, `live_...` for production.
+3. Install the SDK: `npm install @mollie/api-client`
+4. Create a payment on your API:
+
+   ```ts
+   import { createMollieClient } from "@mollie/api-client";
+
+   const mollie = createMollieClient({ apiKey: process.env.MOLLIE_API_KEY });
+
+   const payment = await mollie.payments.create({
+     amount: { currency: "EUR", value: "9.99" },
+     description: "Plan X - <appname>",
+     redirectUrl: "https://<app>.eu/payment/return",
+     webhookUrl: "https://api.<app>.eu/v1/webhooks/mollie",
+   });
+
+   // Redirect user to payment.getCheckoutUrl()
+   ```
+
+5. Add a `POST /v1/webhooks/mollie` endpoint — Mollie POSTs the `id` of the payment on status change:
+   ```ts
+   app.post("/v1/webhooks/mollie", async (req, reply) => {
+     const payment = await mollie.payments.get(req.body.id);
+     if (payment.isPaid()) {
+       // update DB, send confirmation email
+     }
+     reply.send({ received: true });
+   });
+   ```
+6. Add a `payments` table to track transactions:
+
+   ```sql
+   CREATE TABLE payments (
+     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+     user_id UUID NOT NULL REFERENCES users(id),
+     mollie_payment_id TEXT NOT NULL,
+     status TEXT NOT NULL,
+     amount NUMERIC(10, 2) NOT NULL,
+     currency TEXT NOT NULL DEFAULT 'EUR',
+     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   );
+   ```
+
+7. Verify payments in the [Mollie test dashboard](https://www.mollie.com/dashboard) before going live.
