@@ -7,6 +7,10 @@ Use this playbook to get a new web app up and running fast with a solid foundati
 
 **Tip:** Add a `ROADMAP.md` file early to track planned work, milestones, and scope decisions.
 
+## Development Principles
+
+- **Stability before features:** Always ensure existing features work correctly before adding new ones. A working, reliable product is more valuable than one with more features that are broken or unreliable.
+
 ## Live Apps
 
 | App       | Domain       | Repo                                                        | Server path      |
