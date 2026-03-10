@@ -64,6 +64,86 @@ For more details, see [GitHub Dependabot documentation](https://docs.github.com/
 
 ---
 
+## PR Workflow with Copilot Auto-Review
+
+All changes reach `main` via pull requests. GitHub Copilot is automatically requested as reviewer on every non-draft PR. Merging requires all CI checks to pass plus at least one approval (Copilot's counts).
+
+### Files to add to every new repo
+
+#### `.github/workflows/request-copilot-review.yml`
+
+```yaml
+name: Request Copilot Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+jobs:
+  request-copilot-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              reviewers: ['copilot'],
+            });
+```
+
+#### `.github/pull_request_template.md`
+
+```markdown
+## What changed
+
+<!-- Briefly describe what this PR does -->
+
+## Why
+
+<!-- Why is this change needed? Link to issue/task if relevant -->
+
+## Checklist
+
+- [ ] Tested locally
+- [ ] Tests added or updated (if behaviour changed)
+- [ ] No secrets or credentials committed
+- [ ] Migration generated if schema changed (`pnpm db:generate`)
+- [ ] PLAYBOOK.md updated if a pattern or process changed
+```
+
+### Apply branch protection
+
+Run once per repo (requires the repo to be **public** or the account to have **GitHub Pro** — free private repos don't support branch protection via API):
+
+```bash
+REPO="terjetyl/<appname>"
+
+# Get exact job names from .github/workflows/ci.yml first, then list them in contexts
+gh api repos/$REPO/branches/main/protection \
+  --method PUT \
+  --header "Accept: application/vnd.github+json" \
+  --field "required_status_checks[strict]=true" \
+  --field "required_status_checks[contexts][]=test" \
+  --field "enforce_admins=false" \
+  --field "required_pull_request_reviews[required_approving_review_count]=1" \
+  --field "required_pull_request_reviews[dismiss_stale_reviews]=true" \
+  --field "restrictions=null"
+```
+
+Replace `test` with the actual job name(s) from `ci.yml`. For repos with both typecheck and test jobs, add each as a separate `--field "required_status_checks[contexts][]=<job-name>"` argument. Set `enforce_admins=true` if you want no bypass at all.
+
+### Enable Copilot code review
+
+In **GitHub → Settings → Code and automation → Copilot → Code review** — enable it for the repo so Copilot's reviews register as approvals.
+
+---
+
 ## Checklist: Deploying a New App
 
 ### 1. DNS
